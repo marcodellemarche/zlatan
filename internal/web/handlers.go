@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,6 +105,26 @@ type page struct {
 
 	CanStartDrive  bool
 	CanStartPhotos bool
+
+	// Parts is the split export measured against the count the person
+	// declared, for the upload screen. PartsStatus and PartsMissing are the
+	// two lines it produces, already in the reader's language.
+	Parts        core.Parts
+	PartsStatus  string
+	PartsMissing string
+
+	// AutoImport is whether the import starts by itself once every part is
+	// here; the upload screen shows it as a checkbox the person can toggle.
+	AutoImport bool
+
+	// KioskURL is the address of the throwaway browser that downloads straight
+	// onto the NAS, shown on the upload screen as the second route. Empty when
+	// no kiosk is configured, and then no link is shown.
+	KioskURL string
+
+	// PhotosFromDrive is true when the import collected the export from the
+	// person's Drive, where it still takes up their Google storage.
+	PhotosFromDrive bool
 
 	GoogleConnected    bool
 	NextcloudConnected bool
@@ -267,6 +288,22 @@ func (opts Options) wizard(w http.ResponseWriter, r *http.Request) {
 	p.PhotosFacts = factsFor(lang, p.Photos, m)
 	p.GoogleSpaceDrive = googleSpaceDrive(lang, m)
 	p.GoogleSpacePhotos = googleSpacePhotos(lang, m)
+	p.PhotosFromDrive = core.DecodeProgress(m.PhotosProgress).Key == core.ProgressPhotosDoneDrive
+
+	p.AutoImport = m.AutoImport
+	p.KioskURL = opts.Config.KioskURL
+	if p.Screen == "upload" && opts.Runner != nil {
+		if parts, err := opts.Runner.PhotosParts(r.Context(), user); err == nil {
+			p.Parts = parts
+			p.PartsStatus = i18n.T(lang, "parts.status",
+				i18n.Count(lang, int64(parts.Have)), i18n.Count(lang, int64(parts.Expected)))
+			missing := make([]string, len(parts.Missing))
+			for i, n := range parts.Missing {
+				missing[i] = strconv.Itoa(n)
+			}
+			p.PartsMissing = strings.Join(missing, ", ")
+		}
+	}
 
 	// The closing screen states what was actually compared. A missing row is
 	// not an error: the screen falls back to the plain sentence.
@@ -559,6 +596,107 @@ func (opts Options) startPhotosUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		opts.Log.Error("startPhotosUpload: begin", "user", user, "error", err)
 		http.Error(w, "could not start the upload", http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// declarePhotosParts records how many files Google split the export into. It
+// is a plain form, so it works without a script, and it may start the import
+// at once when every part is already here.
+func (opts Options) declarePhotosParts(w http.ResponseWriter, r *http.Request) {
+	user, _, err := identityFrom(r, opts.Config.TrustedProxy)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if opts.Runner == nil {
+		http.Error(w, "the Photos route is not available on this instance", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "could not read the form", http.StatusBadRequest)
+		return
+	}
+	parts, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("parts")))
+	if err != nil {
+		http.Error(w, "the number of files must be a number", http.StatusBadRequest)
+		return
+	}
+	// An unchecked checkbox is simply absent from the POST, so its presence is
+	// the value.
+	auto := r.PostFormValue("auto") != ""
+	if err := opts.Runner.DeclarePhotosParts(r.Context(), user, parts, auto); err != nil {
+		// A refused credential moved the track to the reconnect screen, which
+		// the wizard now shows.
+		if errors.Is(err, core.ErrCredentialRefused) {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		// A generic message, like the sibling handlers: the real error is logged,
+		// not echoed to the browser. The number field is already bounded to
+		// 1..99 in the markup, so the person has the valid range in front of them.
+		opts.Log.Warn("declarePhotosParts", "user", user, "parts", parts, "error", err)
+		http.Error(w, "could not save the number of files", http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// setPhotosAuto toggles "start the import by itself when every file is here".
+// It is a plain form (works without a script), and the person can change it at
+// any time — during an upload or a kiosk download. Turning it on when the files
+// are already present starts the import at once.
+func (opts Options) setPhotosAuto(w http.ResponseWriter, r *http.Request) {
+	user, _, err := identityFrom(r, opts.Config.TrustedProxy)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if opts.Runner == nil {
+		http.Error(w, "the Photos route is not available on this instance", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "could not read the form", http.StatusBadRequest)
+		return
+	}
+	on := r.PostFormValue("auto") != ""
+	if err := opts.Runner.SetAutoImport(r.Context(), user, on); err != nil {
+		if errors.Is(err, core.ErrCredentialRefused) {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		opts.Log.Warn("setPhotosAuto", "user", user, "on", on, "error", err)
+		http.Error(w, "could not save the setting", http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// startPhotosImportNow is the explicit "Start" button on the upload screen: it
+// imports what is in staging if every declared part is there, ignoring the
+// auto-import flag. It refuses an incomplete set, so it can never import half a
+// Takeout.
+func (opts Options) startPhotosImportNow(w http.ResponseWriter, r *http.Request) {
+	user, _, err := identityFrom(r, opts.Config.TrustedProxy)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if opts.Runner == nil {
+		http.Error(w, "the Photos route is not available on this instance", http.StatusServiceUnavailable)
+		return
+	}
+	if _, err := opts.Runner.StartImportIfComplete(r.Context(), user); err != nil {
+		if errors.Is(err, core.ErrCredentialRefused) {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		opts.Log.Error("startPhotosImportNow", "user", user, "error", err)
+		http.Error(w, "could not start the import", http.StatusConflict)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)

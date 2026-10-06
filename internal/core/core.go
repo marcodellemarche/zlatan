@@ -149,6 +149,16 @@ type Migration struct {
 	// limit, and both are 0 until the quota has been read.
 	GoogleOtherBytes int64
 	GoogleTotalBytes int64
+
+	// PhotosPartsExpected is how many archives the person said Google split
+	// their Takeout into, for the upload route. 0 until they say.
+	PhotosPartsExpected int
+
+	// AutoImport starts the import by itself once every declared part is on
+	// disk, for the upload route (files sent to the site or downloaded onto the
+	// NAS by the kiosk browser). False by default: without it the person starts
+	// the import with an explicit click.
+	AutoImport bool
 }
 
 // QuotaOverrun reports the projected Nextcloud usage and the budget when the

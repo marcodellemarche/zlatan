@@ -51,6 +51,10 @@ func (r *Runner) WatchStaging(ctx context.Context) {
 }
 
 func (r *Runner) purgeStaging(ctx context.Context) {
+	// The same clock forgets the credentials of whoever stopped using the
+	// service: see credentials.go.
+	r.sweepIdle(ctx, r.cfg.StagingRetention)
+
 	finished, err := r.store.ListFinished(ctx)
 	if err != nil {
 		r.log.Error("staging sweeper: list", "error", err)

@@ -133,8 +133,10 @@ func (opts Options) uploadStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, opts, session)
 }
 
-// uploadComplete assembles the chunks and queues the import. The state moves
-// to importing here, so the wizard's next poll reflects that the work started.
+// uploadComplete assembles the chunks, and starts the import if this was the
+// last part the person declared. A Takeout split into several files must be
+// imported in one go: the date and albums of a photo can sit in a JSON file in
+// another part, so importing the parts one by one would lose them.
 func (opts Options) uploadComplete(w http.ResponseWriter, r *http.Request) {
 	user, _, err := identityFrom(r, opts.Config.TrustedProxy)
 	if err != nil {
@@ -170,15 +172,16 @@ func (opts Options) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	started := false
 	if opts.Runner != nil {
-		if err := opts.Runner.StartPhotosImport(r.Context(), user); err != nil {
+		if started, err = opts.Runner.AutoImportIfEnabled(r.Context(), user); err != nil {
 			// The archive is safely on disk; the import can be started again.
 			opts.Log.Error("uploadComplete: queue import", "user", user, "error", err)
 			http.Error(w, "the file was uploaded but the import could not be started", http.StatusConflict)
 			return
 		}
 	}
-	writeJSON(w, opts, map[string]any{"complete": true})
+	writeJSON(w, opts, map[string]any{"complete": true, "importing": started})
 }
 
 // uploadAbort discards a session and its chunks.

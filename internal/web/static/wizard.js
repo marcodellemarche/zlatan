@@ -346,24 +346,51 @@ function wireUpload() {
 			(text, [k, v]) => text.replaceAll(`{${k}}`, v),
 			root.dataset[key] ?? '');
 
-	const start = async (file) => {
-		if (!file) return;
+	// The parts of one export go one after the other: each is resumable on its
+	// own, and the server starts the import when the last declared part lands.
+	// Then the page is reloaded, because what it shows (which parts are here,
+	// or the import running) is the server's to say.
+	let busy = false;
+	const start = async (files) => {
+		const list = [...(files ?? [])];
+		if (list.length === 0 || busy) return;
+		busy = true;
 		progress.hidden = false;
-		progress.textContent = say('sending', { file: file.name });
 		try {
-			await upload(file, (percent) => {
-				progress.textContent = say('reading', { file: file.name, percent });
-			}, (sent, total) => {
-				progress.textContent = say('progress', { sent, total });
-			});
-			progress.textContent = say('sent');
-			poll();
+			for (const file of list) {
+				progress.textContent = say('sending', { file: file.name });
+				await upload(file, (percent) => {
+					progress.textContent = say('reading', { file: file.name, percent });
+				}, (sent, total) => {
+					progress.textContent = `${file.name}: ${say('progress', { sent, total })}`;
+				});
+				progress.textContent = say('sent', { file: file.name });
+			}
+			location.reload();
 		} catch (err) {
 			progress.textContent = say(err?.status === 422 ? 'mismatch' : 'failed');
+		} finally {
+			busy = false;
 		}
 	};
 
-	input?.addEventListener('change', () => start(input.files?.[0]));
+	input?.addEventListener('change', () => start(input.files));
+
+	// The auto-import checkbox saves on change without reloading, so toggling it
+	// never interrupts an upload in progress. The Save button is for no-JS only.
+	const autoForm = root.querySelector('[data-auto-form]');
+	const autoToggle = root.querySelector('[data-auto-toggle]');
+	root.querySelector('[data-auto-save]')?.setAttribute('hidden', '');
+	autoToggle?.addEventListener('change', () => {
+		const body = new URLSearchParams();
+		if (autoToggle.checked) body.set('auto', '1');
+		fetch(autoForm.action, {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: body.toString(),
+		}).catch(() => {});
+	});
 
 	// Drag and drop, with the zone lit only while a file is over it.
 	root.addEventListener('dragover', (e) => {
@@ -374,7 +401,7 @@ function wireUpload() {
 	root.addEventListener('drop', (e) => {
 		e.preventDefault();
 		dropzone?.classList.remove('drop--over');
-		start(e.dataTransfer?.files?.[0]);
+		start(e.dataTransfer?.files);
 	});
 }
 

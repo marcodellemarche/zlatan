@@ -38,18 +38,21 @@ func (db *DB) GetMigration(ctx context.Context, user string) (core.Migration, er
 		       drive_bytes_copied, drive_files_copied, photos_assets_added,
 		       last_error, created_at, updated_at,
 		       drive_source_bytes, quota_used_bytes, quota_total_bytes,
-		       google_other_bytes, google_total_bytes
+		       google_other_bytes, google_total_bytes, photos_parts_expected,
+		       auto_import
 		FROM migrations WHERE user = ?`
 
 	var m core.Migration
 	var createdAt, updatedAt string
+	var autoImport int
 	err := db.R.QueryRowContext(ctx, q, user).Scan(
 		&m.User, &m.Email, &m.DriveState, &m.PhotosState,
 		&m.DriveProgress, &m.PhotosProgress,
 		&m.DriveBytesCopied, &m.DriveFilesCopied, &m.PhotosAssetsAdded,
 		&m.LastError, &createdAt, &updatedAt,
 		&m.DriveSourceBytes, &m.QuotaUsedBytes, &m.QuotaTotalBytes,
-		&m.GoogleOtherBytes, &m.GoogleTotalBytes,
+		&m.GoogleOtherBytes, &m.GoogleTotalBytes, &m.PhotosPartsExpected,
+		&autoImport,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.Migration{}, ErrNoMigration
@@ -59,6 +62,7 @@ func (db *DB) GetMigration(ctx context.Context, user string) (core.Migration, er
 	}
 	m.CreatedAt = parseTime(createdAt)
 	m.UpdatedAt = parseTime(updatedAt)
+	m.AutoImport = autoImport != 0
 	return m, nil
 }
 
@@ -174,6 +178,56 @@ func (db *DB) SetGoogleUsage(ctx context.Context, user string, other, total int6
 	})
 }
 
+// SetPhotosParts records how many archives the person said their Takeout was
+// split into.
+func (db *DB) SetPhotosParts(ctx context.Context, user string, parts int) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE migrations SET photos_parts_expected = ?, updated_at = ? WHERE user = ?`,
+			parts, now(), user)
+		return err
+	})
+}
+
+// SetAutoImport records whether the import should start by itself once every
+// declared part is on disk.
+func (db *DB) SetAutoImport(ctx context.Context, user string, on bool) error {
+	v := 0
+	if on {
+		v = 1
+	}
+	return db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE migrations SET auto_import = ?, updated_at = ? WHERE user = ?`,
+			v, now(), user)
+		return err
+	})
+}
+
+// ListAutoImportWaiting returns the users whose Photos half is waiting for an
+// upload AND who asked for the import to start by itself. The server-side sweep
+// works from this, so a kiosk download started with the tab then closed still
+// gets imported once every part has landed.
+func (db *DB) ListAutoImportWaiting(ctx context.Context) ([]string, error) {
+	rows, err := db.R.QueryContext(ctx,
+		`SELECT user FROM migrations WHERE photos_state = ? AND auto_import = 1`,
+		string(core.PhotosAwaitingUpload))
+	if err != nil {
+		return nil, fmt.Errorf("list auto-import waiting: %w", err)
+	}
+	defer rows.Close()
+
+	var users []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, fmt.Errorf("scan auto-import waiting: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
 // InterruptedMigration is one person whose migration was in flight when the
 // process stopped, and which track was running. It is the unit the recovery
 // works in.
@@ -218,6 +272,43 @@ func (db *DB) ListInterrupted(ctx context.Context) ([]InterruptedMigration, erro
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// ListIdle returns the users whose migration has not moved since before, and
+// on which the runner is not working: every track is either finished, failed,
+// not started, or waiting for the person. The credential sweeper forgets what
+// these people gave, because nobody is coming back to use it.
+//
+// Waiting for Google's Takeout is work in flight, not idleness: the watcher
+// moves that state itself, and gives up on its own after a week.
+func (db *DB) ListIdle(ctx context.Context, before time.Time) ([]string, error) {
+	rows, err := db.R.QueryContext(ctx, `
+		SELECT user FROM migrations
+		WHERE updated_at < ?
+		  AND drive_state NOT IN (?, ?, ?)
+		  AND photos_state NOT IN (?, ?, ?, ?, ?)`,
+		before.UTC().Format(timeFormat),
+		string(core.DriveCopying), string(core.DriveImporting), string(core.DriveVerifying),
+		// awaiting_upload is work in flight, not idleness: the files land over
+		// days (site upload or kiosk download) without touching this row, and
+		// forgetting the Immich key or revoking Google under an upload in
+		// progress would strand it. Treated like awaiting_takeout.
+		string(core.PhotosAwaitingUpload), string(core.PhotosAwaitingTakeout),
+		string(core.PhotosDownloading), string(core.PhotosImporting), string(core.PhotosVerifying))
+	if err != nil {
+		return nil, fmt.Errorf("list idle migrations: %w", err)
+	}
+	defer rows.Close()
+
+	var users []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, fmt.Errorf("scan idle migration: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
 
 // ListAwaitingTakeout returns the users whose Photos half is waiting for a
