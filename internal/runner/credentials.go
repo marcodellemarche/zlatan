@@ -110,6 +110,34 @@ func (r *Runner) forget(ctx context.Context, user, provider string) {
 	r.log.Info("credential forgotten", "user", user, "provider", provider)
 }
 
+// credentialSweep is how often the idle sweep runs. It is its own clock, not
+// the staging retention's: the staging sweeper is disabled when retention is 0
+// ("keep nothing"), and that must not also switch off the only thing that
+// forgets the credentials of whoever abandoned a migration.
+const credentialSweep = time.Hour
+
+// WatchCredentials forgets, on its own clock, the credentials of everyone whose
+// migration has gone idle. It runs for the life of the process. The idle
+// threshold is the staging retention (how long a stopped migration is kept
+// before it is cleaned up); when that is 0, an idle migration is cleaned up at
+// the next sweep.
+func (r *Runner) WatchCredentials(ctx context.Context) {
+	ticker := time.NewTicker(credentialSweep)
+	defer ticker.Stop()
+
+	r.log.Info("credential sweeper started", "interval", credentialSweep, "idle", r.cfg.StagingRetention)
+	r.sweepIdle(ctx, r.cfg.StagingRetention)
+	for {
+		select {
+		case <-ctx.Done():
+			r.log.Info("credential sweeper stopped")
+			return
+		case <-ticker.C:
+			r.sweepIdle(ctx, r.cfg.StagingRetention)
+		}
+	}
+}
+
 // sweepIdle forgets the credentials of everyone whose migration has not moved
 // for longer than idle and has no work in flight.
 func (r *Runner) sweepIdle(ctx context.Context, idle time.Duration) {

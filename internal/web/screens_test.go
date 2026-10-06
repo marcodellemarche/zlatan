@@ -108,7 +108,7 @@ func TestEveryScreenRendersInEveryLanguage(t *testing.T) {
 
 			// A key that reached the page means a phrase is missing: T returns
 			// the key itself rather than blanking the line.
-			for _, key := range []string{"btn.", "pill.", "takeout.", "upload.", "wait.", "hint.", "immich."} {
+			for _, key := range []string{"btn.", "pill.", "takeout.", "upload.", "wait.", "hint.", "immich.", "parts.", "auto.", "kiosk."} {
 				if strings.Contains(html, ">"+key) {
 					t.Errorf("%s in %s renders a raw catalogue key starting %q", name, lang, key)
 				}

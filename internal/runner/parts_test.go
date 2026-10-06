@@ -33,7 +33,7 @@ func TestImportUploadWaitsForEveryDeclaredPart(t *testing.T) {
 	staging := filepath.Join(r.cfg.StagingDir, core.SafeName("marco"))
 
 	// The count is declared (without auto-start): nothing to start yet.
-	if err := r.DeclarePhotosParts(ctx, "marco", 2, false); err != nil {
+	if err := r.DeclarePhotosParts(ctx, "marco", 2); err != nil {
 		t.Fatalf("DeclarePhotosParts: %v", err)
 	}
 	writeTakeout(t, staging, "takeout-x-001.zip")
@@ -97,7 +97,7 @@ func TestAutoImportIsOptIn(t *testing.T) {
 	staging := filepath.Join(r.cfg.StagingDir, core.SafeName("marco"))
 
 	// One complete part, auto-import OFF: the sweep leaves it alone.
-	if err := r.DeclarePhotosParts(ctx, "marco", 1, false); err != nil {
+	if err := r.DeclarePhotosParts(ctx, "marco", 1); err != nil {
 		t.Fatalf("DeclarePhotosParts: %v", err)
 	}
 	writeTakeout(t, staging, "takeout-1.zip")
@@ -129,14 +129,14 @@ func TestDeclarePhotosPartsRefusesWhatCannotBeRight(t *testing.T) {
 
 	store.migration.PhotosState = core.PhotosAwaitingUpload
 	for _, n := range []int{0, -1, MaxParts + 1} {
-		if err := r.DeclarePhotosParts(ctx, "marco", n, false); !errors.Is(err, ErrPartsOutOfRange) {
+		if err := r.DeclarePhotosParts(ctx, "marco", n); !errors.Is(err, ErrPartsOutOfRange) {
 			t.Errorf("DeclarePhotosParts(%d) = %v, want ErrPartsOutOfRange", n, err)
 		}
 	}
 
 	// Outside the upload screen there is no count to declare.
 	store.migration.PhotosState = core.PhotosImporting
-	if err := r.DeclarePhotosParts(ctx, "marco", 2, false); !errors.Is(err, ErrNotUploading) {
+	if err := r.DeclarePhotosParts(ctx, "marco", 2); !errors.Is(err, ErrNotUploading) {
 		t.Errorf("DeclarePhotosParts while importing = %v, want ErrNotUploading", err)
 	}
 	if store.state().PhotosPartsExpected != 0 {

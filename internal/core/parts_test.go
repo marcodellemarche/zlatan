@@ -33,6 +33,10 @@ func TestCountParts(t *testing.T) {
 		// A same-name upload of different content is stored under a hash
 		// prefix; the number at the end still reads.
 		{"hash prefix keeps the number", []string{"0123456789ab-" + a, b}, 2, true, nil, false},
+		// A duplicate of part 1 (resent under a hash prefix) is still one part:
+		// it must not stand in for a part that never arrived.
+		{"a resent part 1 is still one part", []string{a, "0123456789ab-" + a}, 2, false, []int{2}, false},
+		{"a resent only part is complete", []string{a, "0123456789ab-" + a}, 1, true, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

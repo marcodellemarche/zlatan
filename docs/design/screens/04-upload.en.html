@@ -36,29 +36,40 @@
 	
 <div class="prose">
 	<h1>Send us the file</h1>
-	<p class="fine">Download the export from Google, then add the files here.</p>
+	<p class="fine">Download every file of the export from Google, then add them here.</p>
 </div>
 
 <main class="panel" id="upload"
       data-reading="Reading {file}: {percent}%"
       data-sending="Sending {file}"
-      data-progress="{sent} of {total} parts"
-      data-sent="Sent. The import has started."
+      data-progress="{sent} of {total} pieces"
+      data-sent="{file} sent."
       data-failed="Interrupted. Try again: it continues from the last piece."
       data-mismatch="The file did not arrive intact. Send it again: it starts from the beginning.">
-	<div class="state" aria-live="polite">
-		
-		<p id="upload-progress" class="facts" hidden></p>
-	</div>
+	
+	<form method="post" action="/photos/parts">
+		<label class="field">
+			<span>How many files did Google give you?</span>
+			<input type="number" name="parts" min="1" max="99" inputmode="numeric" required
+			       value="">
+		</label>
+		<p class="fine">On takeout.google.com, under Manage exports, open the export: Google says how many files it was split into, and lists one Download button per part.</p>
+		<div class="actions">
+			<button class="btn btn--primary" type="submit">Save</button>
+		</div>
+	</form>
 
-	<label class="drop" for="upload-input" id="upload-drop" data-upload-when-js hidden>
-		<span>Drop a file here</span>
-		<span class="btn btn--ghost">Choose a file</span>
-	</label>
-	<input id="upload-input" type="file" accept=".zip,application/zip">
+	
+	<form method="post" action="/photos/auto" data-auto-form>
+		<label class="check">
+			<input type="checkbox" name="auto" value="1" data-auto-toggle >
+			<span>Start the import on its own once every file is here</span>
+		</label>
+		<button class="btn btn--quiet" type="submit" data-auto-save>Save</button>
+	</form>
+	<p class="fine">If this is on, the import starts by itself once every file is here, whether you upload them or the NAS downloads them. If it is off, you press Start. You can send them on different days, but Google&#39;s download links expire after about a week.</p>
 
-	<p class="fine" id="upload-nojs">Sending a file needs JavaScript.</p>
-	<p class="fine" data-upload-when-js hidden>Keep this tab open while it sends. If it stops, it continues from the last piece.</p>
+	
 </main>
 
 

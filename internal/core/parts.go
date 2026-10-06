@@ -47,12 +47,9 @@ func CountParts(names []string, expected int) Parts {
 	if expected <= 0 {
 		return p
 	}
-	if p.Have > expected {
-		p.TooMany = true
-	}
 
 	seen := map[int]bool{}
-	numbered := true
+	numbered := true // no names yet counts as numbered: every part is missing
 	for _, name := range names {
 		m := partNumber.FindStringSubmatch(name)
 		if m == nil {
@@ -65,13 +62,21 @@ func CountParts(names []string, expected int) Parts {
 		}
 		seen[n] = true
 	}
-	if !numbered {
-		return p
-	}
-	for n := 1; n <= expected; n++ {
-		if !seen[n] {
-			p.Missing = append(p.Missing, n)
+
+	if numbered {
+		// Count distinct part NUMBERS, not files. The same part re-sent under a
+		// hash prefix (upload.go) still ends in -NNN.zip, so two files can be the
+		// same part; counting files would let a duplicate stand in for a part
+		// that never arrived and start the import on an incomplete Takeout.
+		p.Have = len(seen)
+		for n := 1; n <= expected; n++ {
+			if !seen[n] {
+				p.Missing = append(p.Missing, n)
+			}
 		}
+	}
+	if p.Have > expected {
+		p.TooMany = true
 	}
 	return p
 }

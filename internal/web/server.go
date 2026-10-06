@@ -116,10 +116,11 @@ type Runner interface {
 	// now if every declared part is on disk, ignoring the auto-import flag.
 	StartImportIfComplete(ctx context.Context, user string) (bool, error)
 
-	// DeclarePhotosParts records how many files Google split the export into and
-	// whether to start automatically; PhotosParts measures what has arrived.
-	// SetAutoImport toggles the automatic start at any time.
-	DeclarePhotosParts(ctx context.Context, user string, parts int, auto bool) error
+	// DeclarePhotosParts records how many files Google split the export into;
+	// PhotosParts measures what has arrived. SetAutoImport toggles the automatic
+	// start at any time — it is a separate setting, so declaring the count never
+	// changes it.
+	DeclarePhotosParts(ctx context.Context, user string, parts int) error
 	SetAutoImport(ctx context.Context, user string, on bool) error
 	PhotosParts(ctx context.Context, user string) (core.Parts, error)
 

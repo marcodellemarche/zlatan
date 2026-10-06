@@ -344,7 +344,7 @@ in internal/i18n, through .T, already in their language.
 	<div class="state" aria-live="polite">
 		{{ with .PhotosFacts }}<p class="facts">{{ . }}</p>{{ end }}
 		<p class="facts">{{ .PartsStatus }}</p>
-		{{ with .PartsMissing }}<p class="fine">{{ $.T "parts.missing" . }}</p>{{ end }}
+		{{ with .PartsMissing }}<p class="fine">{{ . }}</p>{{ end }}
 		{{ if .Parts.TooMany }}<p class="notice notice--reason" role="status">{{ .T "parts.tooMany" }}</p>{{ end }}
 		<p id="upload-progress" class="facts" hidden></p>
 	</div>
@@ -366,9 +366,11 @@ in internal/i18n, through .T, already in their language.
 	</label>
 	<input id="upload-input" type="file" accept=".zip,application/zip" multiple>
 
-	{{/* Route 2: let the NAS download them, via the kiosk browser. */}}
+	{{/* Route 2: let the NAS download them, via the kiosk browser. The link text
+	     stands on its own, so a screen reader announces where it goes. */}}
 	{{ with .KioskURL }}
-	<p class="fine">{{ $.T "kiosk.or" }} <a href="{{ . }}" target="_blank" rel="noopener">{{ $.T "kiosk.open" }}</a></p>
+	<p class="fine">{{ $.T "kiosk.or" }}</p>
+	<p><a class="btn btn--quiet" href="{{ . }}" target="_blank" rel="noopener">{{ $.T "kiosk.open" }}</a></p>
 	{{ end }}
 
 	<p class="fine" id="upload-nojs">{{ .T "upload.needsJs" }}</p>

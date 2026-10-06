@@ -5,11 +5,11 @@ package runner
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/marcodellemarche/zlatan/internal/core"
+	"github.com/marcodellemarche/zlatan/internal/store"
 )
 
 // MaxParts bounds the declared count. Google splits at 50 GB at most, so a
@@ -23,7 +23,7 @@ const MaxParts = 99
 const uploadSweep = time.Minute
 
 // ErrPartsOutOfRange means the declared count is not between 1 and MaxParts.
-var ErrPartsOutOfRange = fmt.Errorf("the number of files must be between 1 and %d", MaxParts)
+var ErrPartsOutOfRange = errors.New("the number of files is out of range")
 
 // ErrNotUploading means the Photos track is not waiting for an upload, so
 // there is no count to declare and nothing to start.
@@ -44,10 +44,11 @@ func (r *Runner) PhotosParts(ctx context.Context, user string) (core.Parts, erro
 }
 
 // DeclarePhotosParts records how many archives the person says Google gave
-// them and whether the import should start by itself. If auto-import is on and
-// the files are already here (e.g. downloaded via kiosk before the number was
-// entered), it starts straight away.
-func (r *Runner) DeclarePhotosParts(ctx context.Context, user string, parts int, auto bool) error {
+// them. It does NOT touch the auto-import flag: that is its own setting
+// (SetAutoImport, /photos/auto), so re-saving the count never flips it. If the
+// files are already here (e.g. downloaded via kiosk before the number was
+// entered) and auto-import is on, it starts straight away.
+func (r *Runner) DeclarePhotosParts(ctx context.Context, user string, parts int) error {
 	if parts < 1 || parts > MaxParts {
 		return ErrPartsOutOfRange
 	}
@@ -59,9 +60,6 @@ func (r *Runner) DeclarePhotosParts(ctx context.Context, user string, parts int,
 		return ErrNotUploading
 	}
 	if err := r.store.SetPhotosParts(ctx, user, parts); err != nil {
-		return err
-	}
-	if err := r.store.SetAutoImport(ctx, user, auto); err != nil {
 		return err
 	}
 	_, err = r.AutoImportIfEnabled(ctx, user)
@@ -196,16 +194,24 @@ func (r *Runner) sweepUploads(ctx context.Context) {
 		return
 	}
 	for _, user := range users {
-		if _, err := r.AutoImportIfEnabled(ctx, user); err != nil {
-			// A start that keeps failing (e.g. Immich not configured, or no key)
-			// would be re-picked every tick forever. Fail the track instead: it
-			// leaves awaiting_upload, so the sweep stops, and the person gets a
-			// stopped screen with a retry rather than a silent minute-by-minute
-			// loop. A credential refusal already moved the track off on its own.
-			r.log.Warn("upload sweeper: start", "user", user, "error", err)
-			if !errors.Is(err, core.ErrCredentialRefused) {
-				r.failPhotos(ctx, user, core.Progress{Key: core.FailImmichMissing})
-			}
+		_, err := r.AutoImportIfEnabled(ctx, user)
+		if err == nil {
+			continue
+		}
+		switch {
+		case errors.Is(err, core.ErrCredentialRefused):
+			// Already moved the track to the reconnect screen on its own.
+		case errors.Is(err, store.ErrNoToken), errors.Is(err, core.ErrCredentialUnreadable):
+			// Permanent: the Immich key is missing or unreadable, which no retry
+			// fixes. Fail the track so the sweep stops re-picking it every tick
+			// and the person gets a stopped screen with a retry.
+			r.log.Warn("upload sweeper: missing credential", "user", user, "error", err)
+			r.failPhotos(ctx, user, core.Progress{Key: core.FailImmichMissing})
+		default:
+			// A transient store or network error: the next tick will likely
+			// succeed, so leave the track waiting rather than failing it on a
+			// momentary glitch.
+			r.log.Warn("upload sweeper: start, will retry", "user", user, "error", err)
 		}
 	}
 }

@@ -295,13 +295,23 @@ func (opts Options) wizard(w http.ResponseWriter, r *http.Request) {
 	if p.Screen == "upload" && opts.Runner != nil {
 		if parts, err := opts.Runner.PhotosParts(r.Context(), user); err == nil {
 			p.Parts = parts
+			// i18n.Files carries the file/files plural, so "1 of 1 file" is never
+			// "1 of 1 files".
 			p.PartsStatus = i18n.T(lang, "parts.status",
-				i18n.Count(lang, int64(parts.Have)), i18n.Count(lang, int64(parts.Expected)))
-			missing := make([]string, len(parts.Missing))
-			for i, n := range parts.Missing {
-				missing[i] = strconv.Itoa(n)
+				i18n.Count(lang, int64(parts.Have)), i18n.Files(lang, int64(parts.Expected)))
+			if len(parts.Missing) > 0 {
+				missing := make([]string, len(parts.Missing))
+				for i, n := range parts.Missing {
+					missing[i] = strconv.Itoa(n)
+				}
+				// Singular when one part is missing, plural otherwise: "part 2" vs
+				// "parts 2, 3". The fully rendered line goes to the template.
+				key := "parts.missing"
+				if len(parts.Missing) == 1 {
+					key = "parts.missingOne"
+				}
+				p.PartsMissing = i18n.T(lang, key, strings.Join(missing, ", "))
 			}
-			p.PartsMissing = strings.Join(missing, ", ")
 		}
 	}
 
@@ -624,10 +634,9 @@ func (opts Options) declarePhotosParts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the number of files must be a number", http.StatusBadRequest)
 		return
 	}
-	// An unchecked checkbox is simply absent from the POST, so its presence is
-	// the value.
-	auto := r.PostFormValue("auto") != ""
-	if err := opts.Runner.DeclarePhotosParts(r.Context(), user, parts, auto); err != nil {
+	// Only the count here; the auto-import checkbox is its own form
+	// (/photos/auto), so saving the number never flips it.
+	if err := opts.Runner.DeclarePhotosParts(r.Context(), user, parts); err != nil {
 		// A refused credential moved the track to the reconnect screen, which
 		// the wizard now shows.
 		if errors.Is(err, core.ErrCredentialRefused) {
@@ -690,6 +699,11 @@ func (opts Options) startPhotosImportNow(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "the Photos route is not available on this instance", http.StatusServiceUnavailable)
 		return
 	}
+	// started is intentionally not inspected: whether this call started the
+	// import or the sweep beat it to it (a race between the page render and the
+	// click), the redirect re-renders the live state — "importing" with its
+	// progress, or the upload screen again if a file went missing. There is no
+	// silent success: the page always shows what is actually true now.
 	if _, err := opts.Runner.StartImportIfComplete(r.Context(), user); err != nil {
 		if errors.Is(err, core.ErrCredentialRefused) {
 			http.Redirect(w, r, "/", http.StatusSeeOther)

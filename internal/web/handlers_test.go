@@ -92,7 +92,6 @@ type fakeRunner struct {
 	freeKnown    bool
 	partsPending bool
 	declared     int
-	declaredAuto bool
 	autoSet      bool
 	parts        core.Parts
 }
@@ -147,12 +146,11 @@ func (f *fakeRunner) SetAutoImport(_ context.Context, _ string, on bool) error {
 	return nil
 }
 
-func (f *fakeRunner) DeclarePhotosParts(_ context.Context, user string, parts int, auto bool) error {
+func (f *fakeRunner) DeclarePhotosParts(_ context.Context, user string, parts int) error {
 	if f.err != nil {
 		return f.err
 	}
 	f.declared = parts
-	f.declaredAuto = auto
 	return nil
 }
 

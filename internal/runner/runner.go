@@ -139,7 +139,7 @@ type Runner struct {
 	limiter chan struct{}
 
 	// claim serialises the decision to start an uploaded import, so two parts
-	// finishing together start it once. See ImportUploadIfComplete.
+	// finishing together start it once. See claimForImport / startUploadedImport.
 	claim sync.Mutex
 
 	// takeoutSeen is the last listing of each person's Takeout folder, so the

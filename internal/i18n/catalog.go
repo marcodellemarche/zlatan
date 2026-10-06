@@ -158,15 +158,16 @@ var catalog = map[Lang]map[string]string{
 
 		"parts.question": "How many files did Google give you?",
 		"parts.where":    "On takeout.google.com, under Manage exports, open the export: Google says how many files it was split into, and lists one Download button per part.",
-		"parts.status":   "%s of %s files are here.",
-		"parts.missing":  "Still to send: part %s.",
+		"parts.status":   "%s of %s here.",
+		"parts.missing":    "Still to send: parts %s.",
+		"parts.missingOne": "Still to send: part %s.",
 		"parts.tooMany":  "There are more files here than the number you gave. Check it on Google and correct it.",
 		"parts.auto":     "If this is on, the import starts by itself once every file is here, whether you upload them or the NAS downloads them. If it is off, you press Start. You can send them on different days, but Google's download links expire after about a week.",
 		"auto.label":     "Start the import on its own once every file is here",
 		"btn.saveParts":  "Save",
 		"btn.importNow":  "Start the import",
-		"kiosk.or":       "Or let the NAS download them:",
-		"kiosk.open":     "download onto the NAS",
+		"kiosk.or":       "Or let the NAS download them, without using your PC:",
+		"kiosk.open":     "Open the throwaway browser on the NAS",
 
 		// Why a track went back to reconnect. These are reasons, so the same key
 		// fills the progress line and the stopped screen's reason.
@@ -350,15 +351,16 @@ var catalog = map[Lang]map[string]string{
 
 		"parts.question": "Quanti file ti ha dato Google?",
 		"parts.where":    "Su takeout.google.com, in Gestisci esportazioni, apri l'esportazione: Google scrive «Questa richiesta è stata suddivisa in N file» ed elenca un pulsante Scarica per ogni parte.",
-		"parts.status":   "Arrivati %s file su %s.",
-		"parts.missing":  "Ancora da mandare: parte %s.",
+		"parts.status":   "Arrivati %s su %s.",
+		"parts.missing":    "Ancora da mandare: le parti %s.",
+		"parts.missingOne": "Ancora da mandare: la parte %s.",
 		"parts.tooMany":  "Qui ci sono più file del numero che hai indicato. Controllalo su Google e correggilo.",
 		"parts.auto":     "Se è spuntato, l'importazione parte da sola quando ci sono tutti i file, sia che li carichi tu sia che li scarichi il NAS. Se è spento, premi tu «Avvia». Puoi mandarli in giorni diversi, ma i link di Google scadono dopo circa una settimana.",
 		"auto.label":     "Avvia l'importazione da sola quando ci sono tutti i file",
 		"btn.saveParts":  "Salva",
 		"btn.importNow":  "Avvia l'importazione",
-		"kiosk.or":       "Oppure fai scaricare al NAS:",
-		"kiosk.open":     "scarica sul NAS",
+		"kiosk.or":       "Oppure fai scaricare al NAS, senza usare il PC:",
+		"kiosk.open":     "Apri il browser usa-e-getta sul NAS",
 
 		"reconnect.googleCopy":    "Google non è collegato: collegalo prima di copiare.",
 		"reconnect.nextcloudCopy": "Nextcloud non è collegato: collegalo prima di copiare.",

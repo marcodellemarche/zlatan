@@ -282,12 +282,14 @@ func (db *DB) ListInterrupted(ctx context.Context) ([]InterruptedMigration, erro
 // Waiting for Google's Takeout is work in flight, not idleness: the watcher
 // moves that state itself, and gives up on its own after a week.
 func (db *DB) ListIdle(ctx context.Context, before time.Time) ([]string, error) {
+	// The state filter is in SQL; the "older than" is applied in Go. timeFormat
+	// is RFC3339Nano, which drops trailing zeros from the fraction, so a
+	// string comparison in SQL is not monotonic — fragile for a decision that
+	// revokes credentials. parseTime + time.Before is exact.
 	rows, err := db.R.QueryContext(ctx, `
-		SELECT user FROM migrations
-		WHERE updated_at < ?
-		  AND drive_state NOT IN (?, ?, ?)
+		SELECT user, updated_at FROM migrations
+		WHERE drive_state NOT IN (?, ?, ?)
 		  AND photos_state NOT IN (?, ?, ?, ?, ?)`,
-		before.UTC().Format(timeFormat),
 		string(core.DriveCopying), string(core.DriveImporting), string(core.DriveVerifying),
 		// awaiting_upload is work in flight, not idleness: the files land over
 		// days (site upload or kiosk download) without touching this row, and
@@ -302,11 +304,13 @@ func (db *DB) ListIdle(ctx context.Context, before time.Time) ([]string, error) 
 
 	var users []string
 	for rows.Next() {
-		var u string
-		if err := rows.Scan(&u); err != nil {
+		var u, updatedAt string
+		if err := rows.Scan(&u, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan idle migration: %w", err)
 		}
-		users = append(users, u)
+		if parseTime(updatedAt).Before(before) {
+			users = append(users, u)
+		}
 	}
 	return users, rows.Err()
 }
