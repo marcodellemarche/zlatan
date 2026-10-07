@@ -52,3 +52,38 @@ func TestListIdle(t *testing.T) {
 		t.Errorf("ListIdle = %v, want %v: work in flight is never idle", users, want)
 	}
 }
+
+// Touch bumps updated_at, which is what keeps the credential sweep from
+// re-selecting and re-forgetting the same abandoned migration on every tick.
+func TestTouchDropsAMigrationOutOfTheIdleWindow(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.EnsureMigration(ctx, "abandoned", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Backdate the row, as if the person walked away long ago.
+	old := time.Now().Add(-90 * 24 * time.Hour).UTC().Format(timeFormat)
+	if _, err := db.W.ExecContext(ctx, `UPDATE migrations SET updated_at = ? WHERE user = ?`, old, "abandoned"); err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Now().Add(-time.Hour)
+	if users, err := db.ListIdle(ctx, before); err != nil || len(users) != 1 {
+		t.Fatalf("ListIdle before Touch = %v, %v; want the abandoned row", users, err)
+	}
+
+	if err := db.Touch(ctx, "abandoned"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same threshold that matched it a moment ago must not match it now:
+	// this is what stops the hourly sweep re-forgetting it forever.
+	users, err := db.ListIdle(ctx, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 0 {
+		t.Errorf("ListIdle after Touch = %v, want none: the sweep must not re-pick it", users)
+	}
+}

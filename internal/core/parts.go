@@ -53,15 +53,21 @@ func CountParts(names []string, expected int) Parts {
 	}
 
 	seen := map[int]bool{}
+	numbered := false
 	for _, name := range names {
 		m := partNumber.FindStringSubmatch(name)
 		if m == nil {
 			continue
 		}
+		// A name shaped like a part is enough to trust the numbering, even when
+		// the number itself is not valid: see the fallback below.
+		numbered = true
 		n, _ := strconv.Atoi(m[1])
 		if n < 1 {
 			// Google numbers parts from 1; a "-000" is not a valid part, so it is
-			// not credited (the Missing loop below also starts at 1).
+			// not credited (the Missing loop below also starts at 1). It still
+			// counts as "numbered", so it does not fall into the no-number
+			// fallback and stand in for a part by being a file on disk.
 			continue
 		}
 		if n > expected {
@@ -70,16 +76,17 @@ func CountParts(names []string, expected int) Parts {
 		seen[n] = true
 	}
 
-	// With any file numbered (or nothing here yet), trust the numbers: count
-	// distinct part NUMBERS, not files. A file WITHOUT Google's -NNN is not a
-	// part of a split export, so it never fills a gap — and the same part re-sent
+	// With any file shaped like a part (or nothing here yet), trust the numbers:
+	// count distinct part NUMBERS, not files. A file WITHOUT Google's -NNN is not
+	// a part of a split export, so it never fills a gap — and the same part re-sent
 	// under a hash prefix (upload.go) still ends in -NNN, so it is not a second
 	// part. Counting files would let a renamed or duplicated file stand in for a
 	// part that never arrived and start the import on an incomplete Takeout.
 	//
-	// Only when NO file is numbered at all (a single-part export named without a
-	// number, or every file renamed) is the declared count all there is to go on.
-	if len(seen) > 0 || len(names) == 0 {
+	// Only when NO file is shaped like a part at all (a single-part export named
+	// without a number, or every file renamed) is the declared count all there is
+	// to go on.
+	if numbered || len(names) == 0 {
 		p.Have = len(seen)
 		for n := 1; n <= expected; n++ {
 			if !seen[n] {

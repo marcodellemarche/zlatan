@@ -51,11 +51,11 @@
 		<label class="field">
 			<span>Quanti file ti ha dato Google?</span>
 			<input type="number" name="parts" min="1" max="99" inputmode="numeric" required
-			       value="">
+			       value="3">
 		</label>
 		<p class="fine">Su takeout.google.com, in Gestisci esportazioni, apri l&#39;esportazione: Google scrive «Questa richiesta è stata suddivisa in N file» ed elenca un pulsante Scarica per ogni parte.</p>
 		<div class="actions">
-			<button class="btn btn--primary" type="submit">Salva</button>
+			<button class="btn btn--quiet" type="submit">Salva</button>
 		</div>
 	</form>
 
@@ -69,6 +69,33 @@
 	</form>
 	<p class="fine">Se è spuntato, l&#39;importazione parte da sola quando ci sono tutti i file, sia che li carichi tu sia che li scarichi il NAS. Se è spento, premi tu «Avvia». Puoi mandarli in giorni diversi, ma i link di Google scadono dopo circa una settimana.</p>
 
+	
+	<div class="state" aria-live="polite">
+		
+		<p class="facts">Arrivati 1 su 3 file.</p>
+		<p class="fine">Ancora da mandare: le parti 2, 3.</p>
+		
+		<p id="upload-progress" class="facts" hidden></p>
+	</div>
+
+	
+	
+
+	
+	<label class="drop" for="upload-input" id="upload-drop" data-upload-when-js hidden>
+		<span>Trascina qui i file</span>
+		<span class="btn btn--ghost">Scegli i file</span>
+	</label>
+	<input id="upload-input" type="file" accept=".zip,application/zip" multiple>
+
+	
+	
+	<p class="fine">Oppure fai scaricare al NAS, senza usare il PC:</p>
+	<p><a class="btn btn--quiet" href="https://kiosk.example.org" target="_blank" rel="noopener">Apri il browser usa-e-getta sul NAS</a></p>
+	
+
+	<p class="fine" id="upload-nojs">Per inviare un file serve JavaScript.</p>
+	<p class="fine" data-upload-when-js hidden>Tieni aperta questa scheda mentre carica. Se si ferma, riprende dall&#39;ultimo pezzo.</p>
 	
 </main>
 

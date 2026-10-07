@@ -44,6 +44,11 @@ func TestCountParts(t *testing.T) {
 		// part 1, so a complete set with a re-download does not stall.
 		{"browser (1) suffix is still its part", []string{"takeout-x-001 (1).zip", "takeout-x-002.zip"}, 2, true, nil, false},
 		{"re-download of part 1 does not fill a gap", []string{"takeout-x-001.zip", "takeout-x-001 (1).zip"}, 2, false, []int{2}, false},
+		// A "-000" is shaped like a part but is not a valid one: it must not be
+		// credited, and it must not fall into the no-number fallback either (where
+		// a file on disk would stand in for a part just by being there).
+		{"a zero-numbered file is not a part", []string{"takeout-x-000.zip"}, 1, false, []int{1}, false},
+		{"a zero-numbered file does not fill a gap", []string{"takeout-x-000.zip", "takeout-x-002.zip"}, 2, false, []int{1}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
