@@ -6,9 +6,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/marcodellemarche/zlatan/internal/config"
 	"github.com/marcodellemarche/zlatan/internal/core"
 	"github.com/marcodellemarche/zlatan/internal/immich"
 	"github.com/marcodellemarche/zlatan/internal/nextcloud"
+	"time"
 )
 
 func hasToken(store *fakeStore, provider string) bool {
@@ -94,5 +96,22 @@ func TestSweepIdleForgetsEverything(t *testing.T) {
 	}
 	if len(google.revoked) != 1 {
 		t.Errorf("the Google grant was not revoked: %v", google.revoked)
+	}
+}
+
+// The credential idle threshold must never drop below a floor: retention 0
+// ("keep no staging") must not forget credentials the instant someone connects
+// them.
+func TestCredentialIdleHasAFloor(t *testing.T) {
+	floor := time.Duration(config.DefaultRetentionDays) * 24 * time.Hour
+	if got := credentialIdle(0); got != floor {
+		t.Errorf("credentialIdle(0) = %v, want the floor %v", got, floor)
+	}
+	if got := credentialIdle(time.Hour); got != floor {
+		t.Errorf("credentialIdle(1h) = %v, want the floor %v", got, floor)
+	}
+	long := 30 * 24 * time.Hour
+	if got := credentialIdle(long); got != long {
+		t.Errorf("credentialIdle(30d) = %v, want %v", got, long)
 	}
 }

@@ -26,9 +26,12 @@ func TestCountParts(t *testing.T) {
 		// importing 1 and 2 would leave part 3 out.
 		{"a part above the count", []string{a, c}, 2, false, []int{2}, true},
 		{"more files than declared", []string{a, b, c}, 2, false, nil, true},
-		// A name without Google's number (renamed by the browser) never blocks:
-		// the count alone decides, and no part is claimed missing on a guess.
-		{"renamed file, count matches", []string{a, "takeout (1).zip"}, 2, true, nil, false},
+		// A file WITHOUT Google's number sits beside a numbered one: it is not a
+		// part (Google always numbers a split export), so it never fills the gap.
+		// "takeout (1).zip" is a browser duplicate far more often than a renamed
+		// part 2, and importing it as part 2 would lose part 2's real contents.
+		{"a non-numbered file does not fill a gap", []string{a, "takeout (1).zip"}, 2, false, []int{2}, false},
+		// Nothing numbered at all: the declared count is all there is to go on.
 		{"renamed file, count short", []string{"photos.zip"}, 2, false, nil, false},
 		// A same-name upload of different content is stored under a hash
 		// prefix; the number at the end still reads.
@@ -37,6 +40,10 @@ func TestCountParts(t *testing.T) {
 		// it must not stand in for a part that never arrived.
 		{"a resent part 1 is still one part", []string{a, "0123456789ab-" + a}, 2, false, []int{2}, false},
 		{"a resent only part is complete", []string{a, "0123456789ab-" + a}, 1, true, nil, false},
+		// A browser re-download adds " (1)" before .zip: still part 1, credited to
+		// part 1, so a complete set with a re-download does not stall.
+		{"browser (1) suffix is still its part", []string{"takeout-x-001 (1).zip", "takeout-x-002.zip"}, 2, true, nil, false},
+		{"re-download of part 1 does not fill a gap", []string{"takeout-x-001.zip", "takeout-x-001 (1).zip"}, 2, false, []int{2}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

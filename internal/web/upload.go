@@ -172,16 +172,20 @@ func (opts Options) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	started := false
 	if opts.Runner != nil {
-		if started, err = opts.Runner.AutoImportIfEnabled(r.Context(), user); err != nil {
-			// The archive is safely on disk; the import can be started again.
-			opts.Log.Error("uploadComplete: queue import", "user", user, "error", err)
-			http.Error(w, "the file was uploaded but the import could not be started", http.StatusConflict)
-			return
+		// The upload itself is done and on disk; starting the import is a separate
+		// step the runner owns. Whether it started the import, moved the track to
+		// a reconnect/stopped screen, or will be retried, the page reload shows
+		// the outcome — so an error here is logged, never reported as an upload
+		// failure (a 409 would make the browser show "Interrupted, try again" and
+		// skip the reload, hiding the real state).
+		if _, err := opts.Runner.AutoImportIfEnabled(r.Context(), user); err != nil {
+			opts.Log.Warn("uploadComplete: auto-import after upload", "user", user, "error", err)
 		}
 	}
-	writeJSON(w, opts, map[string]any{"complete": true, "importing": started})
+	// The browser reloads after a completed upload and reads the live state from
+	// the page, so the response only has to say the upload itself is done.
+	writeJSON(w, opts, map[string]any{"complete": true})
 }
 
 // uploadAbort discards a session and its chunks.

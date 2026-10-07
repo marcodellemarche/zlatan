@@ -204,6 +204,17 @@ func (db *DB) SetAutoImport(ctx context.Context, user string, on bool) error {
 	})
 }
 
+// Touch bumps updated_at without changing anything else. The credential sweep
+// uses it after forgetting an abandoned migration's tokens, so the row falls
+// out of ListIdle's window and is not re-selected (and re-forgotten) on every
+// later sweep.
+func (db *DB) Touch(ctx context.Context, user string) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE migrations SET updated_at = ? WHERE user = ?`, now(), user)
+		return err
+	})
+}
+
 // ListAutoImportWaiting returns the users whose Photos half is waiting for an
 // upload AND who asked for the import to start by itself. The server-side sweep
 // works from this, so a kiosk download started with the tab then closed still
@@ -281,6 +292,15 @@ func (db *DB) ListInterrupted(ctx context.Context) ([]InterruptedMigration, erro
 //
 // Waiting for Google's Takeout is work in flight, not idleness: the watcher
 // moves that state itself, and gives up on its own after a week.
+//
+// Mid-setup states (consent_pending, selecting, not_started) are deliberately
+// NOT excluded: cleaning up an abandoned setup is exactly this sweep's job —
+// a finished or failed track has its credentials released on completion, so the
+// only ones left for the idle sweep are people who connected and never started.
+// They are safe because their updated_at is accurate: unlike awaiting_upload /
+// awaiting_takeout, where files land over days without touching the row, a
+// mid-setup row only sits still when the person has actually walked away, and
+// the caller's threshold has a multi-day floor.
 func (db *DB) ListIdle(ctx context.Context, before time.Time) ([]string, error) {
 	// The state filter is in SQL; the "older than" is applied in Go. timeFormat
 	// is RFC3339Nano, which drops trailing zeros from the fraction, so a
@@ -437,14 +457,22 @@ func (db *DB) PutToken(ctx context.Context, t core.Token) error {
 	}
 	ts := now()
 	return db.Tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tokens (user, provider, sealed, scopes, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT(user, provider) DO UPDATE SET
 				sealed = excluded.sealed,
 				scopes = excluded.scopes,
 				updated_at = excluded.updated_at`,
-			t.User, t.Provider, t.Sealed, t.Scopes, ts, ts)
+			t.User, t.Provider, t.Sealed, t.Scopes, ts, ts); err != nil {
+			return err
+		}
+		// Connecting a credential is activity: bump the migration so the idle
+		// credential sweep does not revoke what the person is still setting up
+		// (their state may sit at not_started while they wait for a Takeout).
+		// A no-op when the row does not exist yet.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE migrations SET updated_at = ? WHERE user = ?`, ts, t.User)
 		return err
 	})
 }

@@ -154,7 +154,7 @@ func (f *fakeRunner) DeclarePhotosParts(_ context.Context, user string, parts in
 	return nil
 }
 
-func (f *fakeRunner) PhotosParts(_ context.Context, _ string) (core.Parts, error) {
+func (f *fakeRunner) PhotosParts(_ string, _ int) (core.Parts, error) {
 	return f.parts, nil
 }
 

@@ -52,8 +52,8 @@ func TestUploadCompleteWaitsForTheOtherParts(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("complete: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"importing":false`) || len(runner.started) != 0 {
-		t.Errorf("one part of several started the import: %s, %v", rec.Body.String(), runner.started)
+	if len(runner.started) != 0 {
+		t.Errorf("one part of several started the import: %v", runner.started)
 	}
 }
 

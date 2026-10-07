@@ -36,10 +36,14 @@ func (p Parts) Complete() bool {
 	return p.Expected > 0 && !p.TooMany && p.Have == p.Expected && len(p.Missing) == 0
 }
 
-// partNumber is the number Google appends to each archive. The match is
-// anchored on the end, so a prefix added to tell apart two files with the same
-// name does not hide it.
-var partNumber = regexp.MustCompile(`(?i)-(\d{1,4})\.zip$`)
+// partNumber is the number Google appends to each archive (-001, -002, …). The
+// match is anchored on the end, so a prefix added to tell apart two files with
+// the same name does not hide it, and it tolerates the " (k)" a browser adds to
+// a re-downloaded file ("takeout-…-001 (1).zip"): that is still part 1, so it
+// is credited to part 1 rather than treated as a new part or an unnumbered junk
+// file. A name with no "-NNN" at all (a single-part export, or a full rename)
+// matches nothing and is handled by CountParts' no-number fallback.
+var partNumber = regexp.MustCompile(`(?i)-(\d{1,4})(?: \(\d+\))?\.zip$`)
 
 // CountParts measures the archive names on disk against the declared count.
 func CountParts(names []string, expected int) Parts {
@@ -49,25 +53,33 @@ func CountParts(names []string, expected int) Parts {
 	}
 
 	seen := map[int]bool{}
-	numbered := true // no names yet counts as numbered: every part is missing
 	for _, name := range names {
 		m := partNumber.FindStringSubmatch(name)
 		if m == nil {
-			numbered = false
 			continue
 		}
 		n, _ := strconv.Atoi(m[1])
+		if n < 1 {
+			// Google numbers parts from 1; a "-000" is not a valid part, so it is
+			// not credited (the Missing loop below also starts at 1).
+			continue
+		}
 		if n > expected {
 			p.TooMany = true
 		}
 		seen[n] = true
 	}
 
-	if numbered {
-		// Count distinct part NUMBERS, not files. The same part re-sent under a
-		// hash prefix (upload.go) still ends in -NNN.zip, so two files can be the
-		// same part; counting files would let a duplicate stand in for a part
-		// that never arrived and start the import on an incomplete Takeout.
+	// With any file numbered (or nothing here yet), trust the numbers: count
+	// distinct part NUMBERS, not files. A file WITHOUT Google's -NNN is not a
+	// part of a split export, so it never fills a gap — and the same part re-sent
+	// under a hash prefix (upload.go) still ends in -NNN, so it is not a second
+	// part. Counting files would let a renamed or duplicated file stand in for a
+	// part that never arrived and start the import on an incomplete Takeout.
+	//
+	// Only when NO file is numbered at all (a single-part export named without a
+	// number, or every file renamed) is the declared count all there is to go on.
+	if len(seen) > 0 || len(names) == 0 {
 		p.Have = len(seen)
 		for n := 1; n <= expected; n++ {
 			if !seen[n] {

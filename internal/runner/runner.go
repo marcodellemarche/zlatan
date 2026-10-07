@@ -75,6 +75,7 @@ type Store interface {
 	ListInterrupted(ctx context.Context) ([]store.InterruptedMigration, error)
 	SetPhotosParts(ctx context.Context, user string, parts int) error
 	SetAutoImport(ctx context.Context, user string, on bool) error
+	Touch(ctx context.Context, user string) error
 	ListAutoImportWaiting(ctx context.Context) ([]string, error)
 	ListIdle(ctx context.Context, before time.Time) ([]string, error)
 }
@@ -387,7 +388,15 @@ func (r *Runner) ImmichKey(ctx context.Context, user string) (immich.Credentials
 	if err != nil {
 		return immich.Credentials{}, err
 	}
-	return immich.OpenCredentials(r.sealer, tok.Sealed)
+	creds, err := immich.OpenCredentials(r.sealer, tok.Sealed)
+	if err != nil {
+		// The key is there but will not unseal: the server's token key changed
+		// or the row is corrupt, not the person's doing. Wrap it like StartDrive
+		// does, so callers can tell this apart from a missing key and from a
+		// transient error (the upload sweep stops instead of retrying forever).
+		return immich.Credentials{}, fmt.Errorf("%w: %v", core.ErrCredentialUnreadable, err)
+	}
+	return creds, nil
 }
 
 // StartDrive queues the Drive migration and returns immediately: the copy runs
@@ -720,7 +729,10 @@ func (r *Runner) runDrive(ctx context.Context, user string, tok core.Token) {
 	if _, err := r.store.SetDriveState(ctx, user, core.DriveDone, core.EncodeProgress(core.Progress{Key: core.ProgressDriveVerified})); err != nil {
 		r.log.Error("runDrive: set done", "user", user, "error", err)
 	}
-	r.releaseFinished(ctx, user)
+	// Detached: releaseFinished makes blocking HTTP revoke calls, and this still
+	// holds the single heavy slot (deferred release). Running it inline would
+	// make the next queued migration wait behind the revoke latency for nothing.
+	go r.releaseFinished(context.WithoutCancel(ctx), user)
 	r.notifyBestEffort(ctx, notify.Message{
 		Title: "zlatan: your files are in Nextcloud",
 		Body:  "The copy finished and was checked. " + v.Detail + ".",
@@ -800,12 +812,11 @@ func (r *Runner) StartPhotosImport(ctx context.Context, user string) error {
 // again" when the file is already here, rather than sending the person back to
 // Google for an export they already downloaded.
 func (r *Runner) PhotosArchiveReady(ctx context.Context, user string) (bool, error) {
-	staging := filepath.Join(r.cfg.StagingDir, core.SafeName(user))
-	archives, err := filepath.Glob(filepath.Join(staging, "*.zip"))
+	names, err := r.stagedArchives(user)
 	if err != nil {
 		return false, err
 	}
-	return len(archives) > 0, nil
+	return len(names) > 0, nil
 }
 
 // StartPhotosTakeout records that the person has asked Google for the export
@@ -889,6 +900,22 @@ func (r *Runner) pollTakeout(ctx context.Context) {
 		r.log.Error("takeout watcher: list", "error", err)
 		return
 	}
+
+	// Drop remembered listings for anyone no longer waiting — found, timed out,
+	// failed or swept — so takeoutSeen tracks only active waiters and does not
+	// grow for the life of the process.
+	r.takeoutMu.Lock()
+	active := make(map[string]bool, len(users))
+	for _, w := range users {
+		active[w.User] = true
+	}
+	for u := range r.takeoutSeen {
+		if !active[u] {
+			delete(r.takeoutSeen, u)
+		}
+	}
+	r.takeoutMu.Unlock()
+
 	for _, w := range users {
 		if err := r.checkTakeout(ctx, w); err != nil {
 			r.log.Error("takeout watcher: check", "user", w.User, "error", err)
@@ -943,11 +970,8 @@ func (r *Runner) checkTakeout(ctx context.Context, w core.TakeoutWait) error {
 
 	r.log.Info("takeout folder found", "user", user)
 
-	// The wait is over for this person: drop their remembered listing so the map
-	// does not keep an entry for every user who ever waited.
-	r.takeoutMu.Lock()
-	delete(r.takeoutSeen, user)
-	r.takeoutMu.Unlock()
+	// The remembered listing is pruned by pollTakeout once this person leaves
+	// the wait (for any reason), so there is nothing to delete here.
 
 	// Move the state off the wait *here*, before the detached goroutine starts,
 	// and not inside it. The goroutine blocks on the shared limiter until any
@@ -1033,8 +1057,21 @@ func (r *Runner) takeoutReady(ctx context.Context, user string, tokens oauth.Tok
 	r.takeoutSeen[user] = seen
 	r.takeoutMu.Unlock()
 
+	// Complete, not just "not too many": with the folder's own file count as the
+	// expected number, a gap in the part numbers (e.g. 2 and 3 present, 1 still
+	// to come, padded by an unnumbered zip) is a missing part, which .TooMany
+	// alone would not catch. A single unnumbered file is still complete, via the
+	// no-number fallback.
+	//
+	// Known limit of the "Add to Drive" route: it has no declared count, so a
+	// missing TRAILING part (Google has written 1 and 2, has not started 3)
+	// cannot be detected — no gap, no higher number. The stability-across-ticks
+	// check below is the mitigation (the listing must be unchanged for a full
+	// poll interval), not a guarantee. The upload route, which has a declared
+	// count, does not have this gap. Google normally writes all parts within
+	// minutes once the export is ready.
 	shaped := len(names) > 0 && nonEmpty == len(names) &&
-		!core.CountParts(names, len(names)).TooMany
+		core.CountParts(names, len(names)).Complete()
 	return shaped && seen == previous, nil
 }
 
@@ -1254,7 +1291,8 @@ func (r *Runner) finishPhotosImport(ctx context.Context, user string, report imm
 	if _, err := r.store.SetPhotosState(ctx, user, core.PhotosDone, core.EncodeProgress(core.Progress{Key: doneKey})); err != nil {
 		r.log.Error("runPhotosImport: set done", "user", user, "error", err)
 	}
-	r.releaseFinished(ctx, user)
+	// Detached: see runDrive — the revoke calls must not hold the heavy slot.
+	go r.releaseFinished(context.WithoutCancel(ctx), user)
 	body := "The import finished. " + v.Detail + "."
 	if fromDrive {
 		body += "\n\nThe export is still in the folder \"" + r.takeoutFolder() + "\" in your Google Drive, taking up your Google storage: delete it there."

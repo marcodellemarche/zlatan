@@ -293,7 +293,7 @@ func (opts Options) wizard(w http.ResponseWriter, r *http.Request) {
 	p.AutoImport = m.AutoImport
 	p.KioskURL = opts.Config.KioskURL
 	if p.Screen == "upload" && opts.Runner != nil {
-		if parts, err := opts.Runner.PhotosParts(r.Context(), user); err == nil {
+		if parts, err := opts.Runner.PhotosParts(user, m.PhotosPartsExpected); err == nil {
 			p.Parts = parts
 			// i18n.Files carries the file/files plural, so "1 of 1 file" is never
 			// "1 of 1 files".
@@ -635,19 +635,19 @@ func (opts Options) declarePhotosParts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Only the count here; the auto-import checkbox is its own form
-	// (/photos/auto), so saving the number never flips it.
+	// (/photos/auto), so saving the number never flips it. The auto-start that
+	// may follow is best effort inside the runner, so the only errors here are a
+	// bad count, the wrong state, or a store failure — each with its own status.
 	if err := opts.Runner.DeclarePhotosParts(r.Context(), user, parts); err != nil {
-		// A refused credential moved the track to the reconnect screen, which
-		// the wizard now shows.
-		if errors.Is(err, core.ErrCredentialRefused) {
-			http.Redirect(w, r, "/", http.StatusSeeOther)
-			return
+		switch {
+		case errors.Is(err, core.ErrPartsOutOfRange):
+			http.Error(w, "the number of files is out of range", http.StatusBadRequest)
+		case errors.Is(err, core.ErrNotUploading):
+			http.Error(w, "not waiting for an upload", http.StatusConflict)
+		default:
+			opts.Log.Error("declarePhotosParts", "user", user, "parts", parts, "error", err)
+			http.Error(w, "could not save the number of files", http.StatusInternalServerError)
 		}
-		// A generic message, like the sibling handlers: the real error is logged,
-		// not echoed to the browser. The number field is already bounded to
-		// 1..99 in the markup, so the person has the valid range in front of them.
-		opts.Log.Warn("declarePhotosParts", "user", user, "parts", parts, "error", err)
-		http.Error(w, "could not save the number of files", http.StatusBadRequest)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -673,13 +673,12 @@ func (opts Options) setPhotosAuto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	on := r.PostFormValue("auto") != ""
+	// SetAutoImport only returns an error when the save itself fails (the
+	// auto-start it may trigger is best effort inside the runner), so this is a
+	// server-side failure, not a bad request.
 	if err := opts.Runner.SetAutoImport(r.Context(), user, on); err != nil {
-		if errors.Is(err, core.ErrCredentialRefused) {
-			http.Redirect(w, r, "/", http.StatusSeeOther)
-			return
-		}
-		opts.Log.Warn("setPhotosAuto", "user", user, "on", on, "error", err)
-		http.Error(w, "could not save the setting", http.StatusBadGateway)
+		opts.Log.Error("setPhotosAuto", "user", user, "on", on, "error", err)
+		http.Error(w, "could not save the setting", http.StatusInternalServerError)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -699,19 +698,14 @@ func (opts Options) startPhotosImportNow(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "the Photos route is not available on this instance", http.StatusServiceUnavailable)
 		return
 	}
-	// started is intentionally not inspected: whether this call started the
-	// import or the sweep beat it to it (a race between the page render and the
-	// click), the redirect re-renders the live state — "importing" with its
-	// progress, or the upload screen again if a file went missing. There is no
-	// silent success: the page always shows what is actually true now.
+	// Whatever happens, redirect to the wizard, which re-renders the live state.
+	// On success it shows "importing"; on an error the runner has already moved
+	// the track to where the person can act next — the reconnect screen, a
+	// stopped screen with a retry, or back to the upload screen — so a 409 with
+	// no way forward is never the answer. started is not inspected for the same
+	// reason: the sweep may have beaten this click, and the page shows the truth.
 	if _, err := opts.Runner.StartImportIfComplete(r.Context(), user); err != nil {
-		if errors.Is(err, core.ErrCredentialRefused) {
-			http.Redirect(w, r, "/", http.StatusSeeOther)
-			return
-		}
-		opts.Log.Error("startPhotosImportNow", "user", user, "error", err)
-		http.Error(w, "could not start the import", http.StatusConflict)
-		return
+		opts.Log.Warn("startPhotosImportNow", "user", user, "error", err)
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

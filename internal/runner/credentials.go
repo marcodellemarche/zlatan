@@ -4,11 +4,14 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/marcodellemarche/zlatan/internal/config"
 	"github.com/marcodellemarche/zlatan/internal/core"
 	"github.com/marcodellemarche/zlatan/internal/immich"
 	"github.com/marcodellemarche/zlatan/internal/nextcloud"
+	"github.com/marcodellemarche/zlatan/internal/store"
 )
 
 // googleProvider is the key the Google token is stored under.
@@ -77,7 +80,7 @@ func (r *Runner) forgetGoogle(ctx context.Context, user string) {
 			cancel()
 		}
 	}
-	r.forget(ctx, user, googleProvider)
+	r.drop(ctx, user, googleProvider)
 }
 
 // forgetNextcloud deletes the app password in Nextcloud, so it stops working
@@ -94,20 +97,37 @@ func (r *Runner) forgetNextcloud(ctx context.Context, user string) {
 				cancel()
 			}
 		}
-		r.forget(ctx, user, nextcloud.Provider)
+		r.drop(ctx, user, nextcloud.Provider)
 	}
 	r.forget(ctx, user, nextcloudFlowProvider)
 }
 
-func (r *Runner) forget(ctx context.Context, user, provider string) {
-	if _, err := r.store.GetToken(ctx, user, provider); err != nil {
-		return
-	}
+// drop deletes a token the caller has already read (so it is known to exist),
+// without a second GetToken. forgetGoogle and forgetNextcloud use it after
+// reading the token to revoke it.
+func (r *Runner) drop(ctx context.Context, user, provider string) {
 	if err := r.store.DeleteToken(ctx, user, provider); err != nil {
 		r.log.Error("release credentials: delete", "user", user, "provider", provider, "error", err)
 		return
 	}
 	r.log.Info("credential forgotten", "user", user, "provider", provider)
+}
+
+// forget deletes a token that the caller has not already read: it checks it is
+// there first, so it logs "forgotten" only when there was something to forget.
+func (r *Runner) forget(ctx context.Context, user, provider string) {
+	if _, err := r.store.GetToken(ctx, user, provider); err != nil {
+		// Nothing stored: the common case, nothing to do and nothing to say.
+		if errors.Is(err, store.ErrNoToken) {
+			return
+		}
+		// A read error (e.g. the store is momentarily busy): do not delete on a
+		// guess, but say so — the next sweep retries. Silence here would hide a
+		// credential that was meant to be forgotten and was not.
+		r.log.Error("release credentials: read before delete", "user", user, "provider", provider, "error", err)
+		return
+	}
+	r.drop(ctx, user, provider)
 }
 
 // credentialSweep is how often the idle sweep runs. It is its own clock, not
@@ -116,24 +136,37 @@ func (r *Runner) forget(ctx context.Context, user, provider string) {
 // forgets the credentials of whoever abandoned a migration.
 const credentialSweep = time.Hour
 
+// credentialIdle is how long a migration must sit still before its credentials
+// are forgotten. It follows the staging retention, but never goes below a floor:
+// retention 0 means "keep no staging" (the staging sweeper is disabled), and
+// that must NOT be read as "forget credentials the instant someone connects
+// them". Someone who has just granted Google/Nextcloud/Immich but not pressed
+// Start is idle by state, not abandoned.
+func credentialIdle(retention time.Duration) time.Duration {
+	floor := time.Duration(config.DefaultRetentionDays) * 24 * time.Hour
+	if retention < floor {
+		return floor
+	}
+	return retention
+}
+
 // WatchCredentials forgets, on its own clock, the credentials of everyone whose
-// migration has gone idle. It runs for the life of the process. The idle
-// threshold is the staging retention (how long a stopped migration is kept
-// before it is cleaned up); when that is 0, an idle migration is cleaned up at
-// the next sweep.
+// migration has gone idle. It runs for the life of the process, independent of
+// the staging sweeper, so it keeps working even when staging retention is 0.
 func (r *Runner) WatchCredentials(ctx context.Context) {
 	ticker := time.NewTicker(credentialSweep)
 	defer ticker.Stop()
 
-	r.log.Info("credential sweeper started", "interval", credentialSweep, "idle", r.cfg.StagingRetention)
-	r.sweepIdle(ctx, r.cfg.StagingRetention)
+	idle := credentialIdle(r.cfg.StagingRetention)
+	r.log.Info("credential sweeper started", "interval", credentialSweep, "idle", idle)
+	r.sweepIdle(ctx, idle)
 	for {
 		select {
 		case <-ctx.Done():
 			r.log.Info("credential sweeper stopped")
 			return
 		case <-ticker.C:
-			r.sweepIdle(ctx, r.cfg.StagingRetention)
+			r.sweepIdle(ctx, idle)
 		}
 	}
 }
@@ -148,5 +181,10 @@ func (r *Runner) sweepIdle(ctx context.Context, idle time.Duration) {
 	}
 	for _, user := range users {
 		r.forgetAll(ctx, user)
+		// Bump the row so this sweep does not keep re-selecting and re-forgetting
+		// the same abandoned migration every hour for the life of the process.
+		if err := r.store.Touch(ctx, user); err != nil {
+			r.log.Error("credential sweeper: touch", "user", user, "error", err)
+		}
 	}
 }

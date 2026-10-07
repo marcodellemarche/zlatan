@@ -122,7 +122,7 @@ type Runner interface {
 	// changes it.
 	DeclarePhotosParts(ctx context.Context, user string, parts int) error
 	SetAutoImport(ctx context.Context, user string, on bool) error
-	PhotosParts(ctx context.Context, user string) (core.Parts, error)
+	PhotosParts(user string, expected int) (core.Parts, error)
 
 	// TakeoutFits reports whether Google's own free space can hold the export,
 	// which decides whether the "Add to Drive" route is offered at all. known

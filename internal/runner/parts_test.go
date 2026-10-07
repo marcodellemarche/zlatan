@@ -43,7 +43,7 @@ func TestImportUploadWaitsForEveryDeclaredPart(t *testing.T) {
 	if got := store.state().PhotosState; got != core.PhotosAwaitingUpload {
 		t.Fatalf("photos state = %q, want awaiting_upload while a part is missing", got)
 	}
-	if parts, _ := r.PhotosParts(ctx, "marco"); len(parts.Missing) != 1 || parts.Missing[0] != 2 {
+	if parts, _ := r.PhotosParts("marco", 2); len(parts.Missing) != 1 || parts.Missing[0] != 2 {
 		t.Errorf("Missing = %v, want [2]", parts.Missing)
 	}
 
@@ -122,6 +122,33 @@ func TestAutoImportIsOptIn(t *testing.T) {
 	}
 }
 
+// A key that is present but will not unseal (the token key changed, or the row
+// is corrupt) must stop the sweep, not loop it every minute. The track fails
+// with the unreadable reason and the key is kept, so restoring the key brings
+// it back.
+func TestSweepStopsOnAnUnreadableKey(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	r := newRunner(t, store, &fakeExecutor{})
+	store.tokens[immich.Provider] = core.Token{User: "marco", Provider: immich.Provider, Sealed: []byte("not-a-sealed-value")}
+	store.migration.PhotosState = core.PhotosAwaitingUpload
+	store.migration.AutoImport = true
+	store.migration.PhotosPartsExpected = 1
+	writeTakeout(t, filepath.Join(r.cfg.StagingDir, core.SafeName("marco")), "takeout-1.zip")
+
+	r.sweepUploads(ctx)
+
+	if got := store.state().PhotosState; got != core.PhotosFailed {
+		t.Fatalf("state = %q, want failed: an unreadable key must stop the sweep", got)
+	}
+	if got := core.DecodeProgress(store.state().LastError).Key; got != core.FailCredentialUnread {
+		t.Errorf("reason = %q, want %q", got, core.FailCredentialUnread)
+	}
+	if _, ok := store.tokens[immich.Provider]; !ok {
+		t.Error("an unreadable key must be kept, not forgotten")
+	}
+}
+
 func TestDeclarePhotosPartsRefusesWhatCannotBeRight(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
@@ -129,14 +156,14 @@ func TestDeclarePhotosPartsRefusesWhatCannotBeRight(t *testing.T) {
 
 	store.migration.PhotosState = core.PhotosAwaitingUpload
 	for _, n := range []int{0, -1, MaxParts + 1} {
-		if err := r.DeclarePhotosParts(ctx, "marco", n); !errors.Is(err, ErrPartsOutOfRange) {
+		if err := r.DeclarePhotosParts(ctx, "marco", n); !errors.Is(err, core.ErrPartsOutOfRange) {
 			t.Errorf("DeclarePhotosParts(%d) = %v, want ErrPartsOutOfRange", n, err)
 		}
 	}
 
 	// Outside the upload screen there is no count to declare.
 	store.migration.PhotosState = core.PhotosImporting
-	if err := r.DeclarePhotosParts(ctx, "marco", 2); !errors.Is(err, ErrNotUploading) {
+	if err := r.DeclarePhotosParts(ctx, "marco", 2); !errors.Is(err, core.ErrNotUploading) {
 		t.Errorf("DeclarePhotosParts while importing = %v, want ErrNotUploading", err)
 	}
 	if store.state().PhotosPartsExpected != 0 {

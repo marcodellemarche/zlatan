@@ -298,6 +298,8 @@ func (f *fakeStore) SetAutoImport(_ context.Context, _ string, on bool) error {
 	return nil
 }
 
+func (f *fakeStore) Touch(_ context.Context, _ string) error { return nil }
+
 func (f *fakeStore) ListAutoImportWaiting(_ context.Context) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
